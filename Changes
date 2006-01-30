@@ -3,4 +3,9 @@ Revision history for Perl module DBD::PgLite
 0.01 Mon Jan 30 13:31:19 2006
     - original version; created by ExtUtils::ModuleMaker 0.44
 
+0.02 Mon Jan 30 13:59:29 2006
+    - prepared for distribution to CPAN
 
+0.03 Mon Jan 30 16:50:00 2006
+    - avoid corrupting DBI::db namespace
+    - small documentation fixes

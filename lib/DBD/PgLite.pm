@@ -6,7 +6,7 @@ our $err = 0;	           # Holds error code for $DBI::err.
 our $errstr = '';	       # Holds error string for $DBI::errstr.
 our $sqlstate = '';	       # Holds SQL state for $DBI::state.
 our $imp_data_size = 0;    # required by DBI
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 ### Modules
 use strict;
@@ -1142,37 +1142,37 @@ sub rollback         { DBD::PgLite::setTransaction(0); DBD::PgLite::setTime(); s
 
 sub prepare {
 	my ($dbh,$statement,$attr,@bind) = @_;
-	my $filtered = $dbh->filter_sql($statement,$attr);
+	my $filtered = DBD::PgLite::Filter::filter_sql($dbh,$statement,$attr);
 	return $dbh->{D}->prepare($filtered,$attr,@bind);
 }
 sub selectrow_array {
 	my ($dbh,$statement,$attr,@bind) = @_; 
-	my $filtered = $dbh->filter_sql($statement,$attr);
+	my $filtered = DBD::PgLite::Filter::filter_sql($dbh,$statement,$attr);
 	return $dbh->{D}->selectrow_array($filtered,$attr,@bind);
 }
 sub selectrow_arrayref { 
 	my ($dbh,$statement,$attr,@bind) = @_; 
-	my $filtered = $dbh->filter_sql($statement,$attr);
+	my $filtered = DBD::PgLite::Filter::filter_sql($dbh,$statement,$attr);
 	return $dbh->{D}->selectrow_arrayref($filtered,$attr,@bind);
 }
 sub selectrow_hashref { 
 	my ($dbh,$statement,$attr,@bind) = @_; 
-	my $filtered = $dbh->filter_sql($statement,$attr);
+	my $filtered = DBD::PgLite::Filter::filter_sql($dbh,$statement,$attr);
 	return $dbh->{D}->selectrow_hashref($filtered,$attr,@bind);
 }
 sub selectall_arrayref { 
 	my ($dbh,$statement,$attr,@bind) = @_; 
-	my $filtered = $dbh->filter_sql($statement,$attr);
+	my $filtered = DBD::PgLite::Filter::filter_sql($dbh,$statement,$attr);
 	return $dbh->{D}->selectall_arrayref($filtered,$attr,@bind);
 }
 sub selectall_hashref { 
 	my ($dbh,$statement,$attr,@bind) = @_; 
-	my $filtered = $dbh->filter_sql($statement,$attr);
+	my $filtered = DBD::PgLite::Filter::filter_sql($dbh,$statement,$attr);
 	return $dbh->{D}->selectall_hashref($filtered,$attr,@bind);
 }
 sub selectcol_arrayref { 
 	my ($dbh,$statement,$attr,@bind) = @_; 
-	my $filtered = $dbh->filter_sql($statement,$attr);
+	my $filtered = DBD::PgLite::Filter::filter_sql($dbh,$statement,$attr);
 	return $dbh->{D}->selectcol_arrayref($filtered,$attr,@bind); #}
 }
 
@@ -1186,7 +1186,7 @@ our $imp_data_size = 0;    # strongly suggested by DBI
 
 ### dbh method additions/overrides ######
 
-package DBI::db;
+package DBD::PgLite::Filter;
 
 # Regexes used in filter_sql()
 my $end_re = qr/(?=[\s\,\)\:\|])|$/;
@@ -1765,7 +1765,7 @@ case-insensitive.
 
 An information function simply returning the name of the current
 locale. The module sets the locale based on the environment variables
-$ENV{LC_COLLATE}, $ENV{LC_CTYPE}, $ENV{LC_ALL}, and $ENV{LANG}, in
+$ENV{LC_COLLATE}, $ENV{LC_ALL}, $ENV{LANG}, and $ENV{LC_CTYPE}, in
 that order. Currently it is not possible to use different locales for
 character type and collation, as far as the module is concerned.
 
@@ -1790,17 +1790,17 @@ Please do not make the mistake of using this module for an important
 production system - too much can go wrong. But as a development tool
 it can be useful, and as a toy it can be fun...
 
+
 =head1 TODO
 
 There is a lot left undone. The next step is probably to handle
 non-SELECT statements better. After that, try to implement/emulate
 sequences.
 
-=back
 
 =head1 SEE ALSO
 
-DBI, DBD::SQLite, DBD::PostgreSQL, DBD::PgLite::MirrorPgToSQLite;
+DBI, DBD::SQLite, DBD::Pg, DBD::PgLite::MirrorPgToSQLite;
 
 =head1 AUTHOR
 

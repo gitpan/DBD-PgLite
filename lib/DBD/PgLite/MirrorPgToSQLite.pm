@@ -6,7 +6,7 @@ use File::Copy;
 require Exporter;
 our @ISA = qw(Exporter);
 our @EXPORT_OK = qw(pg_to_sqlite);
-our $VERSION = '0.02';
+our $VERSION = '0.04';
 
 #### MAIN SUBROUTINE ####
 
@@ -136,27 +136,29 @@ sub mirror_table {
 	my $pages = $opt{pg_dbh}->selectrow_array("select relpages from pg_class where relnamespace = (select oid from pg_namespace where nspname = ?) and relname = ?",{},$sn,$tn);
 	my $ins = $opt{sl_dbh}->prepare("insert into $tn values (". join(',', ("?") x $colcnt) . ")");
 	if ($pages > $opt{page_limit}) {
-		# XXX TODO: USE SINGLE-COL PRIMARY KEY IF AVAILABLE
 		warn "      pagelimit ($opt{page_limit}) kicks in for $sn.$tn ($pages)\n" if $opt{verbose};
-		my $oid_ix_present = $opt{pg_dbh}->selectrow_array("select 1 from pg_indexes where indexdef ~ '[(]oid[)]' and schemaname = ? and tablename = ?",{},$sn,$tn);
-		unless ($oid_ix_present) {
-			if ($opt{pg_dbh}->selectrow_array("select usesuper from pg_user where usename = current_user")) {
-				eval { $opt{pg_dbh}->do("create index ix_${sn}_${tn}_oid on $sn.$tn (oid)") } unless $opt{pg_dbh}->selectrow_array("select relname from pg_class where relname = ?", {}, "ix_${sn}_${tn}_oid");
-				die "COULD NOT CREATE oid INDEX: $@\n" if $@;
-			} else {
-				warn "*** CANNOT CREATE oid INDEX FOR $sn.$tn - NOT SUPERUSER\n*** SKIPPING TABLE!\n";
-				$ins->finish;
-				return;
+		my @pkey = $opt{pg_dbh}->primary_key(undef,$sn,$tn);
+		warn "         (pkey is )".join(":",@pkey)."\n" if $opt{verbose};
+		if (@pkey) {
+			my $pkey_vals = $opt{pg_dbh}->selectall_arrayref("select ".join(', ', @pkey)." from $sn.$tn");
+			my $sql = "select * from $sn.$tn where ".join(" and ", map {"$_ = ?"} @pkey);
+			my $selh = $opt{pg_dbh}->prepare($sql);
+			$opt{sl_dbh}->begin_work;
+			foreach (@$pkey_vals) {
+				$selh->execute(@$_);
+				my $row = $selh->fetchrow_arrayref;
+				$ins->execute(@$row);
 			}
+			$opt{sl_dbh}->commit;
+			$selh->finish;
 		}
-		my $oids = $opt{pg_dbh}->selectcol_arrayref("select oid from $sn.$tn $opt{where}");
-		$opt{sl_dbh}->begin_work;
-		for (@$oids) {
-			my @row = $opt{pg_dbh}->selectrow_array("select * from $sn.$tn where oid = ?",{},$_);
-			$ins->execute(@row);
+		else {
+			warn "*** CANNOT READ $sn.$tn ROW-BY-ROW - NO PRIMARY KEY\n*** SKIPPING TABLE!\n";
+			$ins->finish;
+			return;
 		}
-		$opt{sl_dbh}->commit;
-	} else {
+	}
+	else {
 		my $res = $opt{pg_dbh}->selectall_arrayref("select * from $sn.$tn $opt{where}");
 		if (@$res && scalar(@{$res->[0]}) != $colcnt) {
 			$ins->finish;
@@ -456,7 +458,11 @@ PostgreSQL system tables report that the page count for the table is
 above the limit specified by I<page_limit>, the table is instead
 transferred row-by-row. Default value: 5000; since each page normally
 is 8K, this represents about 40 MB on disk and perhaps 70-100 MB of
-memory usage by the Perl process.
+memory usage by the Perl process. For page_limit to work, the table
+must have a primary key.
+
+NB! Do not set this limit lower than necessary: it is orders of
+magnitude slower than the default "slurp into memory" mode.
 
 =item append
 

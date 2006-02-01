@@ -3,7 +3,7 @@
 use strict;
 
 use DBI;
-use Test::More tests => 74;
+use Test::More tests => 75;
 
 my $fn = "/tmp/pglite_test.$$.sqlite";
 my $dbh = DBI->connect('dbi:PgLite:dbname='.$fn);
@@ -11,7 +11,8 @@ my $dbh = DBI->connect('dbi:PgLite:dbname='.$fn);
 # Scaffolding
 ok( defined $dbh, "connect");
 ok( -f $fn, "file present");
-create_test_tables($dbh);
+is( eval{ create_test_tables($dbh) }, 1, "create test tables" );
+
 my $tpl = "select %s from animal natural join animal_sound natural join sound where %s";
 
 # Tests of a few random features
@@ -73,8 +74,9 @@ is ( functest($dbh,"btrim('xyxbtrimyyx','xy')"), "btrim", "btrim()");
 is ( functest($dbh,"char_length('ab')"), 2, "char_length()");
 is ( functest($dbh,"character_length('ab')"), "2", "character_length()");
 is ( functest($dbh,"chr(97)"), "a", "chr()");
-is ( functest($dbh,"convert('แ','LATIN1')"), "แ", "convert() (2-arg)");
-is ( functest($dbh,"convert('แ','LATIN1','UTF8')"), "รก", "convert() (3-arg)");
+my $latin1 = DBD::PgLite::_latin1_symbol();
+is ( functest($dbh,"convert('แ','$latin1')"), "แ", "convert() (2-arg)");
+is ( functest($dbh,"convert('แ','$latin1','UTF-8')"), "รก", "convert() (3-arg)");
 is ( functest($dbh,"decode('UGdMaXRl', 'base64')"), "PgLite", "decode()");
 is ( functest($dbh,"encode('PgLite','base64')"), "UGdMaXRl", "encode()");
 is ( functest($dbh,"initcap('abc')"), "Abc", "initcap()");
@@ -135,7 +137,9 @@ unlink($fn);
 
 sub functest {
 	my ($dbh,$expr,@bind) = @_;
-	return $dbh->selectrow_array("SELECT $expr",{},@bind);
+	my $res = eval { $dbh->selectrow_array("SELECT $expr",{},@bind) };
+	warn "'SELECT $expr' FAILED: $@\n" if $@;
+	return $res;
 }
 
 sub create_test_tables {
@@ -195,4 +199,5 @@ EOF
 		$dbh->do($_) if /\w/;
 	}
 	DBD::PgLite::_register_stored_functions($dbh);
+	return 1;
 }

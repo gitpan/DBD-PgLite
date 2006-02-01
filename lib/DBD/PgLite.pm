@@ -6,7 +6,7 @@ our $err = 0;	           # Holds error code for $DBI::err.
 our $errstr = '';	       # Holds error string for $DBI::errstr.
 our $sqlstate = '';	       # Holds SQL state for $DBI::state.
 our $imp_data_size = 0;    # required by DBI
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
 ### Modules
 use strict;
@@ -118,9 +118,17 @@ my %_decode = ( 'base64' => sub { MIME::Base64::decode_base64(shift) },
 sub _convert {
 	my ($txt,$from,$to) = @_;
 	return $txt unless $txt;
+	return $txt if $from eq $to;
 	my $c = Text::Iconv->new($from,$to) or die "No conversion possible: $from -> $to\n";
 	$txt = $c->convert($txt) or die "Could not convert $from -> $to";
 	return $txt;
+}
+
+# Guess what Latin-1 is called in the iconv() implementation of this OS
+sub _latin1_symbol {
+	my ($kernel) = POSIX::uname();
+	return '8859-1' if $kernel =~ /SunOS|Solaris/i;
+	return 'ISO-8859-1';
 }
 
 sub _pad {
@@ -144,7 +152,7 @@ sub _pad {
 
 sub _to_ascii {
 	my ($str,$encoding) = @_;
-	$str = _convert($str,$encoding,'LATIN1') if $encoding;
+	$str = _convert($str,$encoding,_latin1_symbol()) if $encoding;
 	$str =~ tr[àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝÞ]
 	          [aaaaaaaceeeeiiiidnoooooouuuuytAAAAAAACEEEEIIIIDNOOOOOOUUUUYT];
 	return $str;
@@ -680,7 +688,7 @@ my @functions =
    {
 	name   => 'convert',
 	argnum => 2,
-	func   => sub { _convert(shift,'LATIN1',uc(shift)) }
+	func   => sub { _convert(shift,_latin1_symbol(),uc(shift)) }
    },
 
    {

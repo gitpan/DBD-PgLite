@@ -6,7 +6,7 @@ our $err = 0;	           # Holds error code for $DBI::err.
 our $errstr = '';	       # Holds error string for $DBI::errstr.
 our $sqlstate = '';	       # Holds SQL state for $DBI::state.
 our $imp_data_size = 0;    # required by DBI
-our $VERSION = '0.05';
+our $VERSION = '0.06';
 
 ### Modules
 use strict;
@@ -1422,7 +1422,30 @@ sub filter_sql {
 	}
 	# Unprotect quoted strings
 	$sql =~ s{\'([a-fA-F0-9]+)\'}{pack("H*",$1)}gie; #};
+	# Catch implicit NEXTVAL calls
+	$sql = catch_nextval($sql,$dbh);
 	# warn "[ FILTERED SQL:\n$sql\n]\n" if $ENV{PGLITEDEBUG};
+	return $sql;
+}
+
+sub catch_nextval {
+	my ($sql,$dbh) = @_;
+	return $sql unless $sql =~ /^\s*INSERT\s+INTO\s+([\w\.]+)\s+\(([^\)]+)\)\s+VALUES\s+\(/si;
+	my $table = lc($1);
+	my $colstr = lc($2);
+	my @pk = $dbh->primary_key(undef,undef,$table);
+	return $sql unless @pk==1;
+	$colstr =~ s/^\s+//;
+	$colstr =~ s/\s+$//;
+	my %cols = map { (lc($_)=>1) } split /\s*,\s*/, $colstr;
+	return $sql if $cols{lc($pk[0])};
+	my $seqname = $table . '_' . lc($pk[0]) . '_seq';
+	my $val = 0;
+	eval { $val = $dbh->selectrow_array("SELECT NEXTVAL('$seqname')") };
+	if ($val) {
+		$sql =~ s/(INTO\s+[\w\.]+\s+\()/$1$pk[0], /i;
+		$sql =~ s/(VALUES\s+\()/$1$val, /i;
+	}
 	return $sql;
 }
 
@@ -1721,15 +1744,17 @@ the maximum value in the column in question.
 There is as yet no support for CREATE SEQUENCE statements. Use the
 autogeneration feature to create sequences.
 
-Implicit calls to nextval() by not specifying a serial column in an
-INSERT are not caught. Also there is no interaction with the SQLite
-builtin autoincrement/last_insert_rowid() functionality. These two
-interlocking issues, however, are more a question of lacking support
-for the SERIAL datatype, than of lacking sequence function support.
+Implicit calls to NEXTVAL() by omitting the serial column from the
+column list in an INSERT are caught in most cases. The main conditions
+that must be fulfilled for this to work are: (1) that the column in
+question is an integer column which is the sole primary key on the
+table; and (2) that the statement is a normal INSERT with a column
+list and a VALUES clause (and not, e.g., a statement of the form
+INSERT INTO x SELECT * FROM y).
 
-=item *
-
-setval() is not supported at all.
+There is as yet no interaction with the SQLite builtin
+autoincrement/last_insert_rowid() functionality in connection with the
+sequence function support.
 
 =back
 
@@ -1930,9 +1955,7 @@ it can be useful, and as a toy it can be fun...
 =head1 TODO
 
 There is a lot left undone. The next step is probably to handle
-non-SELECT statements better. After that, try to integrate
-autoincrement columns with the sequence emulation support.
-
+non-SELECT statements better.
 
 =head1 SEE ALSO
 

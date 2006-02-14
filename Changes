@@ -19,3 +19,6 @@ Revision history for Perl module DBD::PgLite
 0.05 Tue Feb 14 00:20:01 2006
     - Support for sequences and sequence functions
 	- MirrorPgToSQLite: compatibility fix for PostgreSQL 8.1
+
+0.06 Tue Feb 14 11:50:21 2006
+    - Support for implicit nextval() in INSERT statements

@@ -3,7 +3,7 @@
 use strict;
 
 use DBI;
-use Test::More tests => 78;
+use Test::More tests => 79;
 
 my $fn = "/tmp/pglite_test.$$.sqlite";
 my $dbh = DBI->connect('dbi:PgLite:dbname='.$fn);
@@ -120,6 +120,11 @@ is ( functest($dbh,"currval('animal_anim_id_seq')"), 8, "currval()" );
 is ( functest($dbh,"lastval()"), 8, "lastval()" );
 is ( functest($dbh,"setval('animal_anim_id_seq',10)"), 10, "setval()" );
 is ( functest($dbh,"nextval('animal_anim_id_seq')"), 11, "nextval() - after setval" );
+eval { 
+	$dbh->do("insert into animal (anim_name, anim_active, anim_added) values ('Dragon',FALSE,NOW())");
+};
+is ( functest($dbh,"currval('animal_anim_id_seq')"), 12, "currval() - after implicit nextval()" );
+
 
 # Aggregate functions
 is ( $dbh->selectrow_array(sprintf($tpl,"avg(decibels)","anim_active = 't'")), 55.625, "avg()");

@@ -6,7 +6,7 @@ use File::Copy;
 require Exporter;
 our @ISA = qw(Exporter);
 our @EXPORT_OK = qw(pg_to_sqlite);
-our $VERSION = '0.04';
+our $VERSION = '0.05';
 
 #### MAIN SUBROUTINE ####
 
@@ -200,6 +200,7 @@ sub create_indexes {
 		next if /\(oid\)/;
 		next if /_pkey\b/; # No need to recreate primary keys
 		s/USING btree //;
+		s/ ON \w+\.\"?([^\"]+)\"?/ ON $1/;
 		print "      + $_\n" if $opt{verbose};
 		eval {  $opt{sl_dbh}->do($_); };
 		# Pg supports multiple null values in  unique columns - SQLite doesn't

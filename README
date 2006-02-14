@@ -1,13 +1,3 @@
-Documentation on DBD::PgLite and DBD::PgLite::MirrorPgToSQLite follows.
-
-To install, follow the standard Perl installation method after unpacking:
-   perl Makefile.PL
-   make
-   make test
-   make install
-
-------
-
 NAME
     DBD::PgLite - PostgreSQL emulation mode for SQLite
 
@@ -30,6 +20,9 @@ SUMMARY
           AND news_created > NOW() - INTERVAL '7 days'
       ];
       my $res = $dbh->selectall_arrayref($sql,{Columns=>{}});
+      # From v. 0.05 with full sequence function support
+      my $get_nid = "SELECT NEXTVAL('news_news_id_seq')";
+      my $news_id = $dbh->selectrow_array($get_nid);
 
 DESCRIPTION
     The module automatically and transparently transforms a broad range of
@@ -191,17 +184,19 @@ POSTGRESQL COMPATIBILITY
     manually.
 
   Sequence Manipulation Functions
-    *   currval() and nextval() are supported after a fashion if a certain
-        naming scheme for primary key columns has been followed. Given a
-        sequence name such as "cat_cat_id_seq", the emulation layer will get
-        the maximum value for cat_id from the table cat and return that (for
-        currval) or increment it by one before returning it (for nextval).
-        Needless to say, this does not prevent two concurrent instances from
-        getting the same ID from a call to nextval(), nor does it guarantee
-        that a given instance gets a correct ID value after insertion by
-        calling currval(). So obviously this is unreliable and limited in
-        several ways, and there is no interaction with the SQLite builtin
-        autoincrement/last_insert_rowid() functionality.
+    *   There is now full support for all explicit invocations of the
+        sequence functions nextval(), setval(), currval() and lastval().
+        Sequences are emulated using the table pglite_seq. (This works even
+        with multiple connections to the same database file, some of which
+        are using transactions, since SQLite transactions lock the whole
+        database file, luckily eliminating any risk of two connections
+        getting the same value from a nextval() call).
+
+        Implicit calls to nextval() by not specifying a serial column in an
+        INSERT are not caught. Also there is no interaction with the SQLite
+        builtin autoincrement/last_insert_rowid() functionality. These two
+        interlocking issues, however, are more a question of lacking support
+        for the SERIAL datatype, than of lacking sequence function support.
 
     *   setval() is not supported at all.
 
@@ -358,186 +353,17 @@ CAVEATS
 
 TODO
     There is a lot left undone. The next step is probably to handle
-    non-SELECT statements better. After that, try to implement/emulate
-    sequences.
+    non-SELECT statements better. After that, try to integrate autoincrement
+    columns with the sequence emulation support.
 
 SEE ALSO
     DBI, DBD::SQLite, DBD::Pg, DBD::PgLite::MirrorPgToSQLite;
 
+THANKS TO
+    Johan Vromans, for encouraging me to improve the sequence support.
+
 AUTHOR
     Baldur Kristinsson (bk@mbl.is), 2006.
-
-     Copyright (c) 2006 Baldur Kristinsson. All rights reserved.
-     This program is free software; you can redistribute it and/or
-     modify it under the same terms as Perl itself.
-
-
------
-
-
-NAME
-    DBD::PgLite::MirrorPgToSQLite - Mirror tables from PostgreSQL to SQLite
-
-SUMMARY
-     use DBD::PgLite::MirrorPgToSQLite qw(pg_to_sqlite);
-     pg_to_sqlite(
-         sqlite_file => '/var/pg_mirror/news.sqlite',
-         pg_dbh      => $dbh,
-         schema      => 'news',
-         tables      => [ qw(news cat img /^x_news/)],
-         views       => [ 'v_newslist' ],
-         indexes     => 1,
-         verbose     => 1,
-         snapshot    => 1,
-     );
-
-USAGE
-    The purpose of this module is to facilitate mirroring of tables from a
-    PostgreSQL dataabse to a SQLite file. The module has only be tested with
-    PostgreSQL 7.3 and SQLite 3.0-3.2. SQLite 2.x will probably not work; as
-    for PostgreSQL, any version after 7.2 is supposed to work. If it
-    doesn't, please let me know.
-
-    As seen above, options to the pg_to_sqlite() function (which is exported
-    on request) are passed in as a hash. These options are described below.
-    The default values can be changed by overriding the
-    DBD::PgLite::MirrorPgToSQLite::defaults() subroutine.
-
-  Required options
-    Obviously, the mirroring function needs either a PosgtgreSQL database
-    connection or enough information to be able to connect to the database
-    by itself. It also needs the name of a target SQLite file, and a list of
-    tables to copy between the two databases.
-
-    pg_dbh, pg_user, pg_pass, pg_dsn
-        If a database handle is specified in *pg_dbh*, it takes precedence.
-        Otherwise we try to connect using *pg_dsn*, *pg_user*, and *pg_pass*
-        (which are assigned defaults based on the environment variables
-        PGDATABASE, PGUSER and PGPASSWORD, if any of these is present).
-
-    tables
-        The value of the required *tables* option should be an arrayref of
-        strings or a string containing a comma-separated list of tablenames
-        and tablename patterns. A tablename pattern is a string or distinct
-        string portion delimited by forward slashes. To clarify: Suppose
-        that a database contains the tables news, img, img_group, cat,
-        users, comments, news_read_log, x_news_cat, x_news_img, and
-        x_img_group; and that we want to mirror news, img, cat, x_news_img
-        and x_news_cat, leaving the other tables alone. To achieve this, you
-        would set the *tables* option to any of the following (there are of
-        course also other possibilities):
-
-         (1) [qw(news img cat x_news_img x_news_cat)]
-         (2) 'news, img, cat, x_news_img, x_news_cat'
-         (3) [qw(news /img$/ /cat$/)]
-         (4) 'news,/img$/,/cat/'
-
-        The purpose of this seemingly unneccesary flexibility in how the
-        table list is specified is to make the functionality of the module
-        more easily accessible from the command line.
-
-        Please note that the patterns between the slash delimiters are not
-        Perl regular expressions but rather POSIX regular expressions, used
-        to query the PostgreSQL system tables directly.
-
-    sqlite_file
-        This should specify the full path to a SQLite file. While the
-        mirroring takes place, the incoming data is not written directly to
-        this file, but to a file with the same name except for a '.tmp'
-        extension. When the operation has finished, the previous file with
-        the name specified (if any) is renamed with a '.bak' extension, and
-        the .tmp file is renamed to the requested filename. Unless you use
-        the *append* option, the information previously in the file will be
-        totally replaced.
-
-  Other options
-    schema
-        This signifies the schema from which the tables on the PostgreSQL
-        side are to be fetched. Default: 'public'. Only one schema can be
-        specified at a time.
-
-    where
-        A WHERE-condition appended to the SELECT-statement used to get data
-        from the PostgreSQL tables.
-
-    views
-        A list of views, specified in the same manner as the list of tables
-        for the *tables* option. An attempt is made to define corresponding
-        views on the SQLite side (though this functionality is far from
-        reliable).
-
-    indexes
-        A boolean option indicating whether to create indexes for the same
-        columns in SQLite as in PostgreSQL. Default: false. (Normally only
-        the primary key is created).
-
-    functions
-        A boolean indicating whether to attempt to create functions on the
-        SQLite side corresponding to any SQL language (NOT PL/pgSQL or other
-        procedural language) functions in the PostgreSQL database. This is
-        for use with DBD::PgLite only, since these functions are put into
-        the pglite_functions table. Default: false.
-
-    page_limit
-        Normally the information from the PostgreSQL tables is read into
-        memory in one go and transferred directly to the SQLite file. This
-        is, however, obviously not desireable for very large tables. If the
-        PostgreSQL system tables report that the page count for the table is
-        above the limit specified by *page_limit*, the table is instead
-        transferred row-by-row. Default value: 5000; since each page
-        normally is 8K, this represents about 40 MB on disk and perhaps
-        70-100 MB of memory usage by the Perl process. For page_limit to
-        work, the table must have a primary key.
-
-        NB! Do not set this limit lower than necessary: it is orders of
-        magnitude slower than the default "slurp into memory" mode.
-
-    append
-        If this boolean option is true, then instead of creating a new
-        SQLite file, the current contents of the *sqlite_file* are added to.
-        If a table which is being mirrored existed previously in the file,
-        it is dropped and recreated, but any tables not being copied from
-        PostgreSQL in the current run are left alone. (This is primarily
-        useful for mirroring some tables in toto, and others only in part,
-        into the same file). Default: false. Incompatible with the
-        *snapshot* option.
-
-    snapshot
-        If this is true, then the copying from PostgreSQL takes place in
-        serialized mode (transaction isolation level serializable), which
-        should ensure consistency of relations between tables linked by
-        foreign key constraints. Currently, foreign keys are not created on
-        the SQLite side, however. Default: false. Incompatible with the
-        *append* option.
-
-    cachedir
-        The current method for getting information about table structure in
-        PostgreSQL is somewhat slow, especially for databases with very many
-        tables. To offset this, table definitions are cached in a temporary
-        directory so that subsequent mirrorings of the same table will go
-        faster. The downside is, of course, that if the table structure
-        changes, the cache needs to be cleared manually. The cache directory
-        can be specified using this option; the default is
-        /tmp/sqlite_mirror_cache (with separate subdirectories for each
-        user).
-
-    verbose
-        If this is true, a few messages will be output to stderr during the
-        mirroring process.
-
-TODO
-    *   Support for foreign keys is missing.
-
-    *   The method used to read tables bigger than *page_limit* needs to be
-        improved.
-
-    *   It would be nice to have a quick way of telling whether the cached
-        table definition of a specific table is still valid.
-
-    *   Tests.
-
-AUTHOR
-    Baldur Kristinsson (bk@mbl.is), 2004-2006.
 
      Copyright (c) 2006 Baldur Kristinsson. All rights reserved.
      This program is free software; you can redistribute it and/or

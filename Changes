@@ -10,8 +10,12 @@ Revision history for Perl module DBD::PgLite
     - avoid polluting DBI::db namespace
     - small documentation fixes
 
-0.04 Wed Jan  1 14:25:02 2006
+0.04 Wed Feb  1 14:25:02 2006
     - better support for iconv on Solaris (convert function)
     - slightly improved tests
-    - DBD::Pg::MirrorPgToSQLite: changed page_limit handling
+    - DBD::PgLite::MirrorPgToSQLite: changed page_limit handling
     - updated README
+
+0.05 Tue Feb 14 00:20:01 2006
+    - Support for sequences and sequence functions
+	- MirrorPgToSQLite: compatibility fix for PostgreSQL 8.1

@@ -6,7 +6,7 @@ our $err = 0;	           # Holds error code for $DBI::err.
 our $errstr = '';	       # Holds error string for $DBI::errstr.
 our $sqlstate = '';	       # Holds SQL state for $DBI::state.
 our $imp_data_size = 0;    # required by DBI
-our $VERSION = '0.04';
+our $VERSION = '0.05';
 
 ### Modules
 use strict;
@@ -24,11 +24,14 @@ use Text::Iconv;
 use MIME::Base64 ();
 use Digest::MD5 ();
 
-# Instance variables, accessible through 
+# Instance variables, accessible through
 #   setTime, getTime, setTransaction, getTransaction,
 {
   my $Time;
   my $Transaction;
+  my $Dbh;
+  my $Currval = {};
+  my $LastvalSeq;
   sub Time {
 	  $Time = shift if @_;
 	  $Time ||= Time::HiRes::time;
@@ -39,11 +42,31 @@ use Digest::MD5 ();
 	  $Transaction = 0 unless defined $Transaction;
 	  return $Transaction;
   }
+  sub Dbh {
+	  $Dbh = shift if @_;
+	  return $Dbh;
+  }
+  sub Currval {
+	  my ($sn,$set) = @_;
+	  $sn = lc($sn);
+	  $Currval->{$sn} = int($set) if $set;
+	  return $Currval->{$sn};
+  }
+  sub Lastval {
+	  $LastvalSeq = lc(shift) if @_;
+	  return $Currval->{$LastvalSeq};
+  }
 }
 sub setTime { Time(Time::HiRes::time); }
 sub getTime { Time(); }
 sub setTransaction { Transaction(shift); }
 sub getTransaction { Transaction(); }
+sub setDbh { Dbh(shift); }
+sub getDbh { Dbh(); }
+sub getCurrval { Currval(shift); }
+sub setCurrval { Currval(@_); }
+sub getLastval { Lastval(); }
+sub setLastval { Lastval(shift); }
 
 ### Main package methods/subs ######
 
@@ -60,7 +83,10 @@ sub driver {
 }
 
 sub disconnect_all { } # required by DBI
-sub DESTROY { }        # required by DBI
+sub DESTROY {
+	my $dbh = getDbh();
+	$dbh->disconnect if $dbh;
+}
 
 
 # Localeorder function legwork
@@ -76,22 +102,104 @@ my $localeorder_func = sub {
 	return join('', map { $chars{$_} } split //, $str);
 };
 
-# Handles currval and nextval
-sub _sequence { # Only works for tables with an ID column named xxx_id
-	my ($dbh,$sn,$incr) = @_;
-	$incr ||= 0;
-	$sn =~ s/^\w+\.//; # remove schema name
-	my ($tn,$col) = ($1,$2) if $sn=~/^(\w+)_([a-z0-9]+_id)_seq$/;
-	my $val = undef;
-	if ($dbh->selectrow_array("select name from sqlite_master where name = ? and type = 'table'", {}, $tn)) {
-		$val = $dbh->selectrow_array("select max($col)+$incr from $tn");
-		return 'NULL' unless defined $val;
-		return 'NULL' if $val==0 && $dbh->selectrow_array("select count(*) from $tn");
-		return $val;
-	} else {
-		return 'NULL'
+# Make sure sequence environment is sane and yield a
+# database handle to sequence functions
+sub _seq_init {
+	my $sn = lc(shift);
+	my $dbh = getDbh();
+	# Create sequence table if it does not exist
+	my $check_tbl = "select name from sqlite_master where name = ? and type = 'table'";
+	unless ($dbh->selectrow_array($check_tbl, {}, 'pglite_seq')) {
+		$dbh->do("create table pglite_seq (sequence_name text primary key, last_value int, is_locked int, is_called int)");
 	}
+	my $check_seq = "select sequence_name from pglite_seq where sequence_name = ?";
+	# Autocreate sequence if it does not exist
+	unless ($dbh->selectrow_array($check_seq,{},$sn)) {
+		$dbh->do("insert into pglite_seq (sequence_name, last_value, is_locked, is_called) values (?,?,?,?)",
+				 {}, $sn, 1, 1, 0);
+		# Find a matching table, if possible, and set last_value based on that
+		my $tn = $sn;
+		$tn =~ s/_seq$//;
+		my ($val,$col) = (0,'');
+		while (!$val && $tn=~/_+[a-z]*$/) {
+			$col = ($col ? "${1}_$col" : $1) if $tn =~ s/_+([a-z]*)$//;
+			if ($dbh->selectrow_array($check_tbl, {}, $tn)) {
+				eval {
+					$val = $dbh->selectrow_array("select max($col) from $tn");
+				};
+			}
+		}
+		if (int($val) > 0) {
+			$dbh->do("update pglite_seq set last_value = ?, is_called = 1 where sequence_name = ?",
+					 {}, int($val), $sn);
+		}
+		# unlock sequence before we continue
+		$dbh->do("update pglite_seq set is_locked = 0 where sequence_name = ?",{},$sn);
+	}
+	return $dbh;
 }
+
+
+# Advance the sequence object to its next value and return that
+# value.
+sub _nextval {
+	my $sn = lc(shift);
+	my $dbh = _seq_init($sn);
+	my $tries;
+	while (1) {
+		my $rc = $dbh->do("update pglite_seq set last_value = last_value + 1, is_locked = 1 where sequence_name = ? and is_locked = 0 and is_called = 1",{},$sn);
+		last if $rc;
+		$rc = $dbh->do("update pglite_seq set is_locked = 1 where sequence_name = ? and is_locked = 0 and is_called = 0",{},$sn);
+		last if $rc;
+		Time::HiRes::sleep(0.05);
+		die "Too many tries trying to update sequence '$sn' - need manual fix?" if ++$tries > 20;
+	}
+	my $sval = $dbh->selectrow_array("select last_value from pglite_seq where sequence_name = ?",{},$sn);
+	$dbh->do("update pglite_seq set is_locked = 0, is_called = 1 where sequence_name = ? and is_locked = 1",{},$sn);
+	setLastval($sn);
+	setCurrval($sn,$sval);
+	return $sval;
+}
+
+# Return the value most recently obtained by nextval for this sequence
+# in the current session.
+sub _currval {
+	my $sn = lc(shift);
+	my $val = getCurrval($sn);
+	die qq[ERROR: currval of sequence "$sn" is not yet defined in this session] unless $val;
+	return $val;
+}
+
+
+# Return the value most recently returned by nextval in the current
+# session.
+sub _lastval {
+	my $val = getLastval();
+	die qq[ERROR: lastval is not yet defined in this session] unless $val;
+	return $val;
+}
+
+
+# Reset the sequence object's counter value.
+sub _setval {
+	my ($sn,$val,$called) = @_;
+	$sn = lc($sn);
+	$val = int($val);
+	die "ERROR: Value of sequence '$sn' must be a positive integer" unless $val;
+	$called = 1 unless defined($called);
+	$called = $called ? 1 : 0;
+	my $dbh = _seq_init($sn);
+	my $tries;
+	while (1) {
+		my $rc = $dbh->do("update pglite_seq set last_value = ?, is_called = ? where sequence_name = ? and is_locked = 0",
+						  {}, $val, $called, $sn);
+		last if $rc;
+		Time::HiRes::sleep(0.05);
+		die "Too many tries trying to update sequence '$sn' - need manual fix?" if ++$tries > 20;
+	}
+	return $val;
+}
+
 
 # Utility functions for succinct expression below
 
@@ -985,26 +1093,30 @@ my @functions =
 
    # Sequence Manipulation Functions
    # http://www.postgresql.org/docs/current/static/functions-sequence.html
-   # Limited support...
    {
 	name   => 'nextval',
 	argnum => 1,
-	func   => sub { die "SHOULD NOT GET HERE: nextval" }
+	func   => sub { _nextval(@_) }
    },
    {
 	name   => 'currval',
 	argnum => 1,
-	func   => sub { die "SHOULD NOT GET HERE: currval" }
+	func   => sub { _currval(@_)  }
    },
    {
-	name   => 'setval',
-	argnum => 1,
-	func   => sub { die "TODO: setval" }
+	name   => 'lastval',
+	argnum => 0,
+	func   => sub { _lastval()  }
    },
    {
 	name   => 'setval',
 	argnum => 2,
-	func   => sub { die "TODO: setval 2" }
+	func   => sub { _setval(@_) }
+   },
+   {
+	name   => 'setval',
+	argnum => 3,
+	func   => sub { _setval(@_) }
    },
 
    # Misc Functions
@@ -1108,13 +1220,15 @@ sub connect {
 	  or die "Could not connect with dbi::SQLite:$dsn\n";
     DBD::PgLite::_register_builtin_functions($real_dbh);
 	my $handle = DBI::_new_dbh ($drh, {
-		'Name' => $attr{mbl_dsn},
-		'User' => $user,
-		'D' => $real_dbh,
+		'Name'      => $attr{mbl_dsn},
+		'User'      => $user,
+		'D'         => $real_dbh,
+		'Seq'       => undef, # for sequence support
 		'FilterSQL' => $use_filter,
 		%$attr,
 	});
 	DBD::PgLite::_register_stored_functions($handle);
+	DBD::PgLite::setDbh($handle);
 	return $handle;
 }
 sub disconnect_all { my $dbh = shift; $dbh->{D}->disconnect_all(@_) if $dbh && $dbh->{D}; } # required by DBI
@@ -1308,9 +1422,6 @@ sub filter_sql {
 	}
 	# Unprotect quoted strings
 	$sql =~ s{\'([a-fA-F0-9]+)\'}{pack("H*",$1)}gie; #};
-	# CURRVAL and NEXTVAL
-	$sql =~ s{\bCURRVAL\s*\(\s*\'([\.\w]+)\'\s*\)}{DBD::PgLite::_sequence($dbh,$1,0)}gie; #};
-	$sql =~ s{\bNEXTVAL\s*\(\s*\'([\.\w]+)\'\s*\)}{DBD::PgLite::_sequence($dbh,$1,1)}gie; #};
 	# warn "[ FILTERED SQL:\n$sql\n]\n" if $ENV{PGLITEDEBUG};
 	return $sql;
 }
@@ -1366,6 +1477,9 @@ DBD::PgLite - PostgreSQL emulation mode for SQLite
       AND news_created > NOW() - INTERVAL '7 days'
   ];
   my $res = $dbh->selectall_arrayref($sql,{Columns=>{}});
+  # From v. 0.05 with full sequence function support
+  my $get_nid = "SELECT NEXTVAL('news_news_id_seq')";
+  my $news_id = $dbh->selectrow_array($get_nid);
 
 =head1 DESCRIPTION
 
@@ -1587,17 +1701,31 @@ rollback() manually.
 
 =item *
 
-currval() and nextval() are supported after a fashion if a certain
-naming scheme for primary key columns has been followed. Given a
-sequence name such as "cat_cat_id_seq", the emulation layer will get
-the maximum value for cat_id from the table cat and return that (for
-currval) or increment it by one before returning it (for
-nextval). Needless to say, this does not prevent two concurrent
-instances from getting the same ID from a call to nextval(), nor does
-it guarantee that a given instance gets a correct ID value after
-insertion by calling currval(). So obviously this is unreliable and
-limited in several ways, and there is no interaction with the SQLite
-builtin autoincrement/last_insert_rowid() functionality.
+There is now full support for all explicit invocations of the sequence
+functions nextval(), setval(), currval() and lastval(). Sequences are
+emulated using the table pglite_seq. (This works even with multiple
+connections to the same database file, some of which are using
+transactions, since SQLite transactions lock the whole database file,
+luckily eliminating any risk of two connections getting the same value
+from a nextval() call).
+
+Please be aware that sequences are autogenerated if they do not
+exist. Be careful to specify the appropriate sequence names or you
+will get unexpected results.
+
+If a sequence being autogenerated ends with '_seq' and has a name
+which seems to match an existing table + an integer column from that
+table (tablename_colname_seq), it is given an initial value based on
+the maximum value in the column in question.
+
+There is as yet no support for CREATE SEQUENCE statements. Use the
+autogeneration feature to create sequences.
+
+Implicit calls to nextval() by not specifying a serial column in an
+INSERT are not caught. Also there is no interaction with the SQLite
+builtin autoincrement/last_insert_rowid() functionality. These two
+interlocking issues, however, are more a question of lacking support
+for the SERIAL datatype, than of lacking sequence function support.
 
 =item *
 
@@ -1802,13 +1930,17 @@ it can be useful, and as a toy it can be fun...
 =head1 TODO
 
 There is a lot left undone. The next step is probably to handle
-non-SELECT statements better. After that, try to implement/emulate
-sequences.
+non-SELECT statements better. After that, try to integrate
+autoincrement columns with the sequence emulation support.
 
 
 =head1 SEE ALSO
 
 DBI, DBD::SQLite, DBD::Pg, DBD::PgLite::MirrorPgToSQLite;
+
+=head1 THANKS TO
+
+Johan Vromans, for encouraging me to improve the sequence support.
 
 =head1 AUTHOR
 

@@ -3,7 +3,7 @@
 use strict;
 
 use DBI;
-use Test::More tests => 79;
+use Test::More tests => 82;
 
 my $fn = "/tmp/pglite_test.$$.sqlite";
 my $dbh = DBI->connect('dbi:PgLite:dbname='.$fn);
@@ -16,22 +16,25 @@ is( eval{ create_test_tables($dbh) }, 1, "create test tables" );
 my $tpl = "select %s from animal natural join animal_sound natural join sound where %s";
 
 # Tests of a few random features
-is ( $dbh->selectrow_array(sprintf($tpl,"anim_name","sound_name = 'Bark'")), 
+is ( eval { $dbh->selectrow_array(sprintf($tpl,"anim_name","sound_name = 'Bark'")) }, 
 	 "Dog",
 	 "simple natural join"
    );
-is ( $dbh->selectrow_array(sprintf($tpl,"count(*)","sound_id = 4")), 
+is ( eval { $dbh->selectrow_array(sprintf($tpl,"count(*)","sound_id = 4")) }, 
 	 2,
 	 "colname collision avoidance"
    );
-is ( $dbh->selectrow_array(sprintf($tpl,"count(*)","sound_id = 4 and anim_active = 't'")), 
+is ( eval { $dbh->selectrow_array(sprintf($tpl,"count(*)","sound_id = 4 and anim_active = 't'")) }, 
 	 1,
 	 "boolean col"
    );
-is ( $dbh->selectrow_array(sprintf($tpl,"anim_name","sound_name ~ 'H' and anim_name ~* 's'")), 
+is ( eval { $dbh->selectrow_array(sprintf($tpl,"anim_name","sound_name ~ 'H' and anim_name ~* 's'")) }, 
 	 "Snake",
 	 "pattern match"
    );
+is ( eval { table_aliases($dbh) }, 1, "table aliases" );
+is ( eval { prepost($dbh,'prefilter') }, 'Dog', "prefilter" );
+is ( eval { prepost($dbh,'postfilter') }, 'Dog', "postfilter" );
 
 # Mathematical functions
 is ( functest($dbh,"abs(-2)"), 2, "abs()" );
@@ -120,7 +123,7 @@ is ( functest($dbh,"currval('animal_anim_id_seq')"), 8, "currval()" );
 is ( functest($dbh,"lastval()"), 8, "lastval()" );
 is ( functest($dbh,"setval('animal_anim_id_seq',10)"), 10, "setval()" );
 is ( functest($dbh,"nextval('animal_anim_id_seq')"), 11, "nextval() - after setval" );
-eval { 
+eval {
 	$dbh->do("insert into animal (anim_name, anim_active, anim_added) values ('Dragon',FALSE,NOW())");
 };
 is ( functest($dbh,"currval('animal_anim_id_seq')"), 12, "currval() - after implicit nextval()" );
@@ -148,6 +151,31 @@ sub functest {
 	my $res = eval { $dbh->selectrow_array("SELECT $expr",{},@bind) };
 	warn "'SELECT $expr' FAILED: $@\n" if $@;
 	return $res;
+}
+
+sub table_aliases {
+	my $dbh = shift;
+	my $sql = qq[SELECT a.anim_id FROM animal a NATURAL JOIN animal_sound x NATURAL JOIN sound s WHERE s.sound_name = 'Bark'];
+	my $dog = $dbh->selectrow_array($sql);
+	unless ($dog == 1) {
+		warn "Aliases (basic): Expected Dog = 1, got $dog\n";
+		return 2;
+	}
+	$sql = qq[SELECT a.* FROM animal a NATURAL JOIN animal_sound x NATURAL JOIN sound s WHERE s.sound_name = 'Bark'];
+	my $res = $dbh->selectall_arrayref($sql);
+	unless (@$res == 1 && @{$res->[0]}==4) {
+		warn "Aliases (starred): Expected 1:4, got ".scalar(@$res).":".scalar(@{$res->[0]})."\n";
+		return 3;
+	}
+	return 1;
+}
+
+sub prepost {
+	my ($dbh,$mode) = @_;
+	my $sql = qq[SELECT XXXanim_nameXXX FROM anXXXimal WHERE animXXX_id = 1];
+	my $filter = sub { local($_)=shift; s/XXX//g; return $_ };
+	my $nam = $dbh->selectrow_array($sql,{$mode=>$filter});
+	return $nam;
 }
 
 sub create_test_tables {

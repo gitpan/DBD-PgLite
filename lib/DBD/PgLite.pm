@@ -6,7 +6,7 @@ our $err = 0;	           # Holds error code for $DBI::err.
 our $errstr = '';	       # Holds error string for $DBI::errstr.
 our $sqlstate = '';	       # Holds SQL state for $DBI::state.
 our $imp_data_size = 0;    # required by DBI
-our $VERSION = '0.06';
+our $VERSION = '0.08';
 
 ### Modules
 use strict;
@@ -1317,13 +1317,17 @@ my $qs_re  = qr/(?:''|'(?:[^\']|'')+')$end_re/; # quoted string
 my $func_simple_re = qr/\b\w+\s*\(\s*(?:$col_re|$qs_re)?(?:\s*,\s*(?:$col_re|$qs_re))*\s*\)/; # simple function call
 my $func_complex_re = qr/\b\w+\s*\(\s*(?:$col_re|$qs_re|$func_simple_re)(?:\s*,\s*(?:$col_re|$qs_re|$func_simple_re))*\s*\)/; #complex function call
 my $chunk_re = qr/(?:$col_re|$qs_re|$func_simple_re|$func_complex_re)/;
-my $join_re = qr/\s+NATURAL\s+(?:LEFT\s+|RIGHT\s+)?(?:OUTER\s+|INNER\s+|CROSS\s+)?JOIN\s+/i;
+my $join_re = qr/\s+NATURAL\s+(?:LEFT\s+|RIGHT\s+|FULL\s+)?(?:OUTER\s+|INNER\s+|CROSS\s+)?JOIN\s+/i;
 
 #######################)!}}]];;;;!!!///'''''''''''""""""""""
 
 sub filter_sql {
 	my ($dbh,$sql,$attr) = @_;
 	# warn "[ UNFILTERED SQL:\n$sql\n]\n" if $ENV{PGLITEDEBUG}>1;
+	# Prefilter SQL
+	$sql = ($dbh->{prefilter}->($sql) || $sql)  if ref $dbh->{prefilter}  eq 'CODE';
+	$sql = ($attr->{prefilter}->($sql) || $sql) if ref $attr->{prefilter} eq 'CODE';
+	# Fix time for transaction
 	DBD::PgLite::setTime() unless DBD::PgLite::getTransaction();
 	# Strip out all trailing ";" and make sure statement ends in space (don't ask!)
 	while ($sql =~ s/\s*\;\s*$//s) { next; }
@@ -1372,7 +1376,7 @@ sub filter_sql {
 		# ILIKE => LIKE
 		s{\bI(LIKE)\b}{$1}gi;
 		# extract(field from dtvalue)
-		s{\b(EXTRACT\s*\(\s*)(\w+)\s+FROM\s+}{$1'$2',}gi;
+		s{\b(EXTRACT\s*\(\s*)\'?(\w+)\'?\s+FROM\s+}{$1'$2',}gi;
 		# trim(both 'x' from 'xAx'): reverse arguments
 		s{\bTRIM\s*\(\s*BOTH\s+($chunk_re)\s+FROM\s+($chunk_re)\s*\)}{BTRIM($2,$1)}gi;
 		s{\bTRIM\s*\(\s*LEADING\s+($chunk_re)\s+FROM\s+($chunk_re)\s*\)}{LTRIM($2,$1)}gi;
@@ -1395,11 +1399,20 @@ sub filter_sql {
 	}
 	# Solve table aliases problem.
 	# ("select x.a, y.b from table t1 as x t2 as y" does not work)
-	while ($sql =~ s/\b(FROM\s.*?)(\w+)\s+AS\s+(\w+)/$1$2/i) {
-		my $real = $2;
-		my $alias = $3;
-		my $re = qr/\b$alias\.(\w+)/i;
-		$sql =~ s{$re}{$real.$1}g;
+	my $from_clause = $1 if $sql =~ /\s+FROM\s+(.*?)(?:\sWHERE|\sON|\sUSING|\;|$)/si;
+	if ($from_clause) {
+		my @ftables = split /\s*(?:,|(?:NATURAL\s+|LEFT\s+|RIGHT\s+|FULL\s+|OUTER\s+|INNER\s+|CROSS\s+)*JOIN)\s*/i, $from_clause;
+		foreach my $tb (@ftables) {
+			$tb =~ s/^\s+//;
+			$tb =~ s/\s+$//;
+			if ($tb =~ /\s/) {
+				my ($real,$alias) = split /\s+(?:AS\s+)?/i, $tb;
+				next unless $real && $alias;
+				$sql =~ s/\Q$tb\E/$real/g;
+				$sql =~ s/\b$alias\.(\w+)/$real.$1/g;
+				$sql =~ s/\b$alias\.\*([,\s])/$real.*$1/g;
+			}
+		}
 	}
 	# Solve ambiguous column problem in natural join
 	# ("select cat_id, sc_id, cat_name, sc_name from cat natural join subcat" does not work)
@@ -1417,13 +1430,16 @@ sub filter_sql {
 			}
 		}
 		for my $c (keys %col) {
-			$sql =~ s/\b$c\b/$col{$c}.$c/g;
+			$sql =~ s/([^\w\.])$c([^\w\.])/$1$col{$c}.$c$2/g;
 		}
 	}
 	# Unprotect quoted strings
 	$sql =~ s{\'([a-fA-F0-9]+)\'}{pack("H*",$1)}gie; #};
 	# Catch implicit NEXTVAL calls
 	$sql = catch_nextval($sql,$dbh);
+	# Postfilter SQL
+	$sql = ($dbh->{postfilter}->($sql) || $sql)  if ref $dbh->{postfilter}  eq 'CODE';
+	$sql = ($attr->{postfilter}->($sql) || $sql) if ref $attr->{postfilter} eq 'CODE';
 	# warn "[ FILTERED SQL:\n$sql\n]\n" if $ENV{PGLITEDEBUG};
 	return $sql;
 }
@@ -1538,11 +1554,26 @@ I<FilterSQL> option as a statement attribute, e.g.:
   my $sth = $dbh->prepare($sql, {FilterSQL=>0});
   $res = $dbh->selectall_arrayref($sql, {FilterSQL=>0}, @bind);
 
+It is possible to specify user-defined pre- and postfiltering
+routines, both globally (by specifying them as attributes of the
+database handle) and locally (by specifying them as statement
+attributes):
+
+  $dbh = DBI->connect("dbi:PgLite:$file",undef,undef,
+                      {prefilter=>\&prefilter});
+  $res = $dbh->selectall_arrayref($sql,
+                                  {postfilter=>\&postfilter},
+                                  @bind_values);
+
+The pre-/postfiltering subroutine receives the SQL as parameter and is
+expected to return the changed SQL.
+
 =head1 STATUS OF THE MODULE
 
 This module was initially developed using SQLite 3.0 and PostgreSQL
-7.3. It seems to work with newer versions of SQLite (3.1 and 3.2), but
-has not been tested with PostgreSQL 8.x.
+7.3, but it should be fully compatible with newer versions of both
+SQLite (3.1 and 3.2 have been tested) and PostgreSQL (8.1 has been
+tested).
 
 Support for SELECT statements and the WHERE-conditions of DELETE and
 UPDATE statements is rather good, though still incomplete. The module
@@ -1822,22 +1853,22 @@ See http://www.postgresql.org/docs/current/static/functions-misc.html
 
 =item *
 
-Array functions - see
+Array functions are not implemented - see
 http://www.postgresql.org/docs/current/static/functions-array.html
 
 =item *
 
-Binary string (BYTEA) functions - see
+Binary string (BYTEA) functions are not implemented - see
 http://www.postgresql.org/docs/current/static/functions-binarystring.html
 
 =item *
 
-Geometric functions - see
+Geometric functions are not implemented - see
 http://www.postgresql.org/docs/current/static/functions-geometry.html
 
 =item *
 
-Network Address Functions - see
+Network Address Functions are not implemented - see
 http://www.postgresql.org/docs/current/static/functions-net.html
 
 =back
@@ -1897,14 +1928,14 @@ the '~' regex-matching operator and its variants. They take two
 arguments, a string and a regular expression. matches() is case
 sensitive, imatches() isn't.
 
-=item matches_safe(), matches_safe(): 
+=item matches_safe(), imatches_safe(): 
 
 These work in the same way as matches() and imatches() except that
 metacharacters are escaped in the regex argument. They are therefore
 in many cases more suitable for user input and other untrusted
 sources.
 
-=item lower_latin1(): 
+=item lower_latin1():
 
 Depending on platform, lower() and upper() may not
 transform the case of non-ascii characters despite a proper locale
@@ -1912,7 +1943,7 @@ being defined in the environment. This functions assumes that a
 Latin-1 locale is active and returns a lower-case version of the input
 given this assumption.
 
-=item localeorder(): 
+=item localeorder():
 
 DBD::SQLite does not provide access to defining SQLite collation
 functions. This is a workaround for a specific case where this
@@ -1936,8 +1967,8 @@ character type and collation, as far as the module is concerned.
 
 The companion module, DBD::PgLite::MirrorPgToSQLite, may be of use in
 conjunction with this module. It can be used for easily mirroring
-specific tables from a PostgreSQL database, moving views and functions
-as well if desired.
+specific tables from a PostgreSQL database, moving views and (some)
+functions as well if desired.
 
 
 =head1 CAVEATS

@@ -57,10 +57,23 @@ DESCRIPTION
       my $sth = $dbh->prepare($sql, {FilterSQL=>0});
       $res = $dbh->selectall_arrayref($sql, {FilterSQL=>0}, @bind);
 
+    It is possible to specify user-defined pre- and postfiltering routines,
+    both globally (by specifying them as attributes of the database handle)
+    and locally (by specifying them as statement attributes):
+
+      $dbh = DBI->connect("dbi:PgLite:$file",undef,undef,
+                          {prefilter=>\&prefilter});
+      $res = $dbh->selectall_arrayref($sql,
+                                      {postfilter=>\&postfilter},
+                                      @bind_values);
+
+    The pre-/postfiltering subroutine receives the SQL as parameter and is
+    expected to return the changed SQL.
+
 STATUS OF THE MODULE
-    This module was initially developed using SQLite 3.0 and PostgreSQL 7.3.
-    It seems to work with newer versions of SQLite (3.1 and 3.2), but has
-    not been tested with PostgreSQL 8.x.
+    This module was initially developed using SQLite 3.0 and PostgreSQL 7.3,
+    but it should be fully compatible with newer versions of both SQLite
+    (3.1 and 3.2 have been tested) and PostgreSQL (8.1 has been tested).
 
     Support for SELECT statements and the WHERE-conditions of DELETE and
     UPDATE statements is rather good, though still incomplete. The module
@@ -259,18 +272,18 @@ POSTGRESQL COMPATIBILITY
         See
         http://www.postgresql.org/docs/current/static/functions-misc.html
 
-    *   Array functions - see
+    *   Array functions are not implemented - see
         http://www.postgresql.org/docs/current/static/functions-array.html
 
-    *   Binary string (BYTEA) functions - see
+    *   Binary string (BYTEA) functions are not implemented - see
         http://www.postgresql.org/docs/current/static/functions-binarystring
         .html
 
-    *   Geometric functions - see
+    *   Geometric functions are not implemented - see
         http://www.postgresql.org/docs/current/static/functions-geometry.htm
         l
 
-    *   Network Address Functions - see
+    *   Network Address Functions are not implemented - see
         http://www.postgresql.org/docs/current/static/functions-net.html
 
 EXTRAS
@@ -321,7 +334,7 @@ EXTRAS
         arguments, a string and a regular expression. matches() is case
         sensitive, imatches() isn't.
 
-    matches_safe(), matches_safe():
+    matches_safe(), imatches_safe():
         These work in the same way as matches() and imatches() except that
         metacharacters are escaped in the regex argument. They are therefore
         in many cases more suitable for user input and other untrusted
@@ -354,8 +367,8 @@ EXTRAS
   DBD::PgLite::MirrorPgToSQLite
     The companion module, DBD::PgLite::MirrorPgToSQLite, may be of use in
     conjunction with this module. It can be used for easily mirroring
-    specific tables from a PostgreSQL database, moving views and functions
-    as well if desired.
+    specific tables from a PostgreSQL database, moving views and (some)
+    functions as well if desired.
 
 CAVEATS
     Some functions defined by the module are not suitable for use with UTF-8

@@ -22,3 +22,10 @@ Revision history for Perl module DBD::PgLite
 
 0.06 Tue Feb 14 11:50:21 2006
     - Support for implicit nextval() in INSERT statements
+
+0.07 Tue Feb 14 14:33:10 2006
+    - prefilter/postfilter
+    - pod change
+
+0.08 Wed Feb 15 10:48:56 2006
+    - Much improved table aliasing support

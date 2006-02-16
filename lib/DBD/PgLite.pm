@@ -6,7 +6,7 @@ our $err = 0;	           # Holds error code for $DBI::err.
 our $errstr = '';	       # Holds error string for $DBI::errstr.
 our $sqlstate = '';	       # Holds SQL state for $DBI::state.
 our $imp_data_size = 0;    # required by DBI
-our $VERSION = '0.08';
+our $VERSION = '0.09';
 
 ### Modules
 use strict;
@@ -1399,10 +1399,11 @@ sub filter_sql {
 	}
 	# Solve table aliases problem.
 	# ("select x.a, y.b from table t1 as x t2 as y" does not work)
-	my $from_clause = $1 if $sql =~ /\s+FROM\s+(.*?)(?:\sWHERE|\sON|\sUSING|\;|$)/si;
+	my $from_clause = $1 if $sql =~ /\s+FROM\s+(.*?)(?:\sWHERE|\sON|\sUSING|\sGROUP\s+BY|\sHAVING|\sORDER\s+BY|\sLIMIT|\;|$)/si;
 	if ($from_clause) {
 		my @ftables = split /\s*(?:,|(?:NATURAL\s+|LEFT\s+|RIGHT\s+|FULL\s+|OUTER\s+|INNER\s+|CROSS\s+)*JOIN)\s*/i, $from_clause;
 		foreach my $tb (@ftables) {
+			$tb =~ s/[\(\)]/ /g;
 			$tb =~ s/^\s+//;
 			$tb =~ s/\s+$//;
 			if ($tb =~ /\s/) {
@@ -1420,21 +1421,33 @@ sub filter_sql {
 		my @tables = ($sql =~ /(\w+)$join_re/gi);
 		push @tables, ($sql =~ /$join_re(\w+)/gi);
 		my (%seen,%col);
-		for (@tables) {
-			next if $seen{$_}++;
-			my $res = $dbh->selectall_arrayref("pragma table_info($_)",{Columns=>{}});
+		for my $tab (@tables) {
+			next if $seen{$tab}++;
+			my $res = $dbh->selectall_arrayref("pragma table_info($tab)",{Columns=>{}});
 			next unless $res && ref $res eq 'ARRAY';
 			for my $row (@$res) {
-				next if $col{ $row->{name} };
-				$col{ $row->{name} } = $_;
+				if ($col{ $row->{name} }) {
+					$col{ $row->{name} }->[0]++;
+				}
+				else {
+					$col{ $row->{name} } = [1, $tab];
+				}
 			}
 		}
 		for my $c (keys %col) {
-			$sql =~ s/([^\w\.])$c([^\w\.])/$1$col{$c}.$c$2/g;
+			next unless $col{$c}->[0] > 1;
+			if ($from_clause && $from_clause =~ /\([^\)]*\b$col{$c}->[1]\b[^\)]*\)/) {
+				# Table grouping in joins addles SQLite's brains.
+				# It messes aliases up (and indeed table referencing in colnames generally).
+				$sql =~ s/\b$col{$c}->[1]\.(\w+)/$1/g;
+			}
+			else {
+				$sql =~ s/([^\w\.])$c([^\w\.])/$1$col{$c}->[1].$c$2/g;
+			}
 		}
 	}
 	# Unprotect quoted strings
-	$sql =~ s{\'([a-fA-F0-9]+)\'}{pack("H*",$1)}gie; #};
+	$sql =~ s{\'([a-fA-F0-9]+)\'}{pack("H*",$1)}gie; #};\';
 	# Catch implicit NEXTVAL calls
 	$sql = catch_nextval($sql,$dbh);
 	# Postfilter SQL
@@ -1486,9 +1499,6 @@ sub finalize {
 1;
 __END__
 
-#
-#######################)!}}]];;;;!!!///'''''''''''""""""""""/;
-__END__
 
 =pod
 

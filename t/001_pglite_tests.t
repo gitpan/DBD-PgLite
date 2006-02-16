@@ -167,6 +167,18 @@ sub table_aliases {
 		warn "Aliases (starred): Expected 1:4, got ".scalar(@$res).":".scalar(@{$res->[0]})."\n";
 		return 3;
 	}
+	$sql = qq[SELECT extract(day FROM a.anim_added) FROM animal a NATURAL JOIN animal_sound x NATURAL JOIN sound s WHERE s.sound_name = 'Bark'];
+	my $day = $dbh->selectrow_array($sql);
+	unless ($day == 1) {
+		warn "Aliases (FROM in  function): Expected 1, got $day\n";
+		return 4;
+	}
+	$sql = qq[SELECT a.anim_id FROM (animal a NATURAL JOIN animal_sound x) NATURAL JOIN sound s WHERE s.sound_name = 'Bark'];
+	$dog = $dbh->selectrow_array($sql);
+	unless ($dog == 1) {
+		warn "Aliases (grouping paren): Expected Dog = 1, got $dog\n";
+		return 2;
+	}
 	return 1;
 }
 

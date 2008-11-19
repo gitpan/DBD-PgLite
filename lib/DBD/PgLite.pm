@@ -6,7 +6,7 @@ our $err = 0;	           # Holds error code for $DBI::err.
 our $errstr = '';	       # Holds error string for $DBI::errstr.
 our $sqlstate = '';	       # Holds SQL state for $DBI::state.
 our $imp_data_size = 0;    # required by DBI
-our $VERSION = '0.09';
+our $VERSION = '0.10';
 
 ### Modules
 use strict;
@@ -148,9 +148,9 @@ sub _nextval {
 	my $tries;
 	while (1) {
 		my $rc = $dbh->do("update pglite_seq set last_value = last_value + 1, is_locked = 1 where sequence_name = ? and is_locked = 0 and is_called = 1",{},$sn);
-		last if $rc;
+		last if $rc && $rc > 0;
 		$rc = $dbh->do("update pglite_seq set is_locked = 1 where sequence_name = ? and is_locked = 0 and is_called = 0",{},$sn);
-		last if $rc;
+		last if $rc && $rc > 0;
 		Time::HiRes::sleep(0.05);
 		die "Too many tries trying to update sequence '$sn' - need manual fix?" if ++$tries > 20;
 	}
@@ -193,7 +193,7 @@ sub _setval {
 	while (1) {
 		my $rc = $dbh->do("update pglite_seq set last_value = ?, is_called = ? where sequence_name = ? and is_locked = 0",
 						  {}, $val, $called, $sn);
-		last if $rc;
+		last if $rc && $rc > 0;
 		Time::HiRes::sleep(0.05);
 		die "Too many tries trying to update sequence '$sn' - need manual fix?" if ++$tries > 20;
 	}

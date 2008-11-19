@@ -1,5 +1,8 @@
 Revision history for Perl module DBD::PgLite
 
+0.10 Wed Nov 19 15:02:24 2008
+  - Fixed bug in sequence support (submitted by Anton Berezin)
+
 0.09 Thu Feb 16 13:45:22 2006
   - Fixed bug in table aliasing and column disambiguation
   - Better support for grouped tables in join clause

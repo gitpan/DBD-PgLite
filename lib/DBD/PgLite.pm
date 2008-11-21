@@ -6,7 +6,7 @@ our $err = 0;	           # Holds error code for $DBI::err.
 our $errstr = '';	       # Holds error string for $DBI::errstr.
 our $sqlstate = '';	       # Holds SQL state for $DBI::state.
 our $imp_data_size = 0;    # required by DBI
-our $VERSION = '0.10';
+our $VERSION = '0.11';
 
 ### Modules
 use strict;
@@ -1263,9 +1263,9 @@ sub rollback         { DBD::PgLite::setTransaction(0); DBD::PgLite::setTime(); s
 
 
 sub prepare {
-	my ($dbh,$statement,$attr,@bind) = @_;
+	my ($dbh,$statement,$attr) = @_;
 	my $filtered = DBD::PgLite::Filter::filter_sql($dbh,$statement,$attr);
-	return $dbh->{D}->prepare($filtered,$attr,@bind);
+	return $dbh->{D}->prepare($filtered,$attr);
 }
 sub selectrow_array {
 	my ($dbh,$statement,$attr,@bind) = @_; 
@@ -1288,9 +1288,9 @@ sub selectall_arrayref {
 	return $dbh->{D}->selectall_arrayref($filtered,$attr,@bind);
 }
 sub selectall_hashref { 
-	my ($dbh,$statement,$attr,@bind) = @_; 
+	my ($dbh,$statement,$kf,$attr,@bind) = @_; 
 	my $filtered = DBD::PgLite::Filter::filter_sql($dbh,$statement,$attr);
-	return $dbh->{D}->selectall_hashref($filtered,$attr,@bind);
+	return $dbh->{D}->selectall_hashref($filtered,$kf,$attr,@bind);
 }
 sub selectcol_arrayref { 
 	my ($dbh,$statement,$attr,@bind) = @_; 

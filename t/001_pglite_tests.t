@@ -3,7 +3,7 @@
 use strict;
 
 use DBI;
-use Test::More tests => 87;
+use Test::More tests => 89;
 
 my $fn = "/tmp/pglite_test.$$.sqlite";
 my $dbh = DBI->connect('dbi:PgLite:dbname='.$fn);
@@ -145,6 +145,11 @@ is ( $dbh->selectrow_array(sprintf($tpl,"(decibels::float)/3.2","anim_id = 1")),
 
 # Stored procedures
 is ( $dbh->selectrow_array(sprintf($tpl,"lcname(anim_id)","anim_id = 1")), 'dog', "stored procedures");
+
+# selectall_hashref
+my $rh = $dbh->selectall_hashref("select * from animal", "anim_name");
+ok($rh, "selectall_hashref() returned something");
+is($rh->{Cat}{anim_id}, 2, "selectall_hashref() returned correct result");
 
 # clean up
 unlink($fn);

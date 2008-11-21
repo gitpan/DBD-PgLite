@@ -1,5 +1,8 @@
 Revision history for Perl module DBD::PgLite
 
+0.11 Fri Nov 21 15:32:55 2008
+  - Fixed bug in selectall_hashref (by Anton Berezin)
+
 0.10 Wed Nov 19 15:02:24 2008
   - Fixed bug in sequence support (submitted by Anton Berezin)
 
